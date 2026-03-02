@@ -8,9 +8,23 @@ import torchvision.utils
 from torchvision.utils import save_image
 import time
 
-def rendering_python(sigma_x, sigma_y, rho, coords, colours_with_alpha, sr_size, step_size, device):
+def rendering_python(sigma_x, sigma_y, rho, coords, colours_with_alpha, feat_grads, sr_size, step_size, device):
+    ####python剪枝修改
+    threshold = 0.1  # 设定梯度阈值，你可以后续调整这个值
+    #找出梯度大于阈值的高斯球（True/False 掩码）
+    valid_mask = (feat_grads > threshold).squeeze(-1)
+    #网络上采样倍数是16(4x4)，让每 16 个高斯球中始终保留第1个。
+    valid_mask[0::16] = True
+    #根据掩码过滤高斯求
+    sigma_x = sigma_x[valid_mask]
+    sigma_y = sigma_y[valid_mask]
+    rho = rho[valid_mask]
+    coords = coords[valid_mask]
+    colours_with_alpha = colours_with_alpha[valid_mask]
+    ####python剪枝修改
+
     sr_h, sr_w = sr_size[0], sr_size[1]
-    num_gs = sigma_x.shape[0]
+    num_gs = sigma_x.shape[0] #此处的num_gs即为剪枝后的数量
 
     sigma_x = sigma_x[...,None]
     sigma_y = sigma_y[...,None]
@@ -83,7 +97,7 @@ def rendering_python(sigma_x, sigma_y, rho, coords, colours_with_alpha, sr_size,
 
     return final_image
 
-def rendering_cuda(sigma_x, sigma_y, rho, coords, colours_with_alpha, sr_size, step_size, device):
+def rendering_cuda(sigma_x, sigma_y, rho, coords, colours_with_alpha, feat_grads, sr_size, step_size, device):
     from basicsr.utils.gs_cuda.gswrapper import GSCUDA
     sigmas = torch.cat([sigma_y/step_size*2/(sr_size[1] - 1), sigma_x/step_size*2/(sr_size[0] - 1),  rho], dim=-1).contiguous()  # (gs num, 3)
     coords[:, 0] = (coords[:, 0] + 1 - 1/sr_size[1]) * sr_size[1] / (sr_size[1] - 1) - 1.0
@@ -93,11 +107,11 @@ def rendering_cuda(sigma_x, sigma_y, rho, coords, colours_with_alpha, sr_size, s
     # with torch.no_grad():
     #    final_image = GSCUDA.apply(sigmas, coords, colours_with_alpha, rendered_img)
     # final_image = (torch.sum(sigmas)+torch.sum(coords)+torch.sum(colours_with_alpha))*final_image
-    final_image = GSCUDA.apply(sigmas, coords, colours_with_alpha, rendered_img)
+    final_image = GSCUDA.apply(sigmas, coords, colours_with_alpha, feat_grads, rendered_img)
     final_image = final_image.permute(2, 0, 1).contiguous()
     return final_image
 
-def rendering_cuda_buffer(sigma_x, sigma_y, rho, coords, colours_with_alpha, sr_size, step_size, device, buffer_size = 1000000):
+def rendering_cuda_buffer(sigma_x, sigma_y, rho, coords, colours_with_alpha, feat_grads,sr_size, step_size, device, buffer_size = 1000000):
     from basicsr.utils.gs_cuda.gswrapper import GSCUDA
     sigmas = torch.cat([sigma_y/step_size*2/(sr_size[1] - 1), sigma_x/step_size*2/(sr_size[0] - 1),  rho], dim=-1).contiguous()  # (gs num, 3)
     coords[:, 0] = (coords[:, 0] + 1 - 1/sr_size[1]) * sr_size[1] / (sr_size[1] - 1) - 1.0
@@ -111,12 +125,12 @@ def rendering_cuda_buffer(sigma_x, sigma_y, rho, coords, colours_with_alpha, sr_
         # print(f'processing{buffer_id+1}/{buffer_num}')
         idx_start, idx_end = buffer_id * buffer_size, (buffer_id+1) * buffer_size
         final_image = GSCUDA.apply(sigmas[idx_start:idx_end], coords[idx_start:idx_end],
-                                    colours_with_alpha[idx_start:idx_end], final_image)
+                                    colours_with_alpha[idx_start:idx_end], feat_grads[idx_start:idx_end], final_image)
         # final_image += buffer_image
     final_image = final_image.permute(2, 0, 1).contiguous()
     return final_image
 
-def rendering_cuda_new(sigma_x, sigma_y, rho, coords, colours_with_alpha, sr_size, step_size,  device, dmax=1):
+def rendering_cuda_new(sigma_x, sigma_y, rho, coords, colours_with_alpha, feat_grads, sr_size, step_size,  device, dmax=1):
     from basicsr.utils.gs_cuda_dmax.gswrapper import GSCUDA
     sigmas = torch.cat([sigma_y/step_size*2/(sr_size[1] - 1), sigma_x/step_size*2/(sr_size[0] - 1),  rho], dim=-1).contiguous()  # (gs num, 3)
     coords[:, 0] = (coords[:, 0] + 1 - 1/sr_size[1]) * sr_size[1] / (sr_size[1] - 1) - 1.0
@@ -126,11 +140,11 @@ def rendering_cuda_new(sigma_x, sigma_y, rho, coords, colours_with_alpha, sr_siz
     # with torch.no_grad():
     #     final_image = GSCUDA.apply(sigmas, coords, colours_with_alpha, rendered_img, dmax)
     # final_image = (torch.sum(sigmas)+torch.sum(coords)+torch.sum(colours_with_alpha))*final_image
-    final_image = GSCUDA.apply(sigmas, coords, colours_with_alpha, rendered_img, dmax)
+    final_image = GSCUDA.apply(sigmas, coords, colours_with_alpha, feat_grads, rendered_img, dmax)
     final_image = final_image.permute(2, 0, 1).contiguous()
     return final_image
 
-def rendering_cuda_new_buffer(sigma_x, sigma_y, rho, coords, colours_with_alpha, sr_size, step_size,  device, dmax=1, buffer_size = 1000000):
+def rendering_cuda_new_buffer(sigma_x, sigma_y, rho, coords, colours_with_alpha, feat_grads, sr_size, step_size,  device, dmax=1, buffer_size = 1000000):
     from basicsr.utils.gs_cuda_dmax.gswrapper import GSCUDA
     sigmas = torch.cat([sigma_y/step_size*2/(sr_size[1] - 1), sigma_x/step_size*2/(sr_size[0] - 1),  rho], dim=-1).contiguous()  # (gs num, 3)
     coords[:, 0] = (coords[:, 0] + 1 - 1/sr_size[1]) * sr_size[1] / (sr_size[1] - 1) - 1.0
@@ -177,7 +191,11 @@ def generate_2D_gaussian_splatting_step(sr_size, gs_parameters, scale, scale_mod
     alpha = torch.sigmoid(gs_parameters[:, 3:4])
     colours = torch.sigmoid(gs_parameters[:, 4:7])
     coords = (gs_parameters[:, 7:9] * 2 - 1)
+    # 添加提取出来的第10维作为特征梯度。
+    feat_grads = gs_parameters[:, 9:10].contiguous()
     colours_with_alpha = colours * alpha
+
+
 
 
     ## todo for save GS parameters
@@ -202,11 +220,11 @@ def generate_2D_gaussian_splatting_step(sr_size, gs_parameters, scale, scale_mod
         if if_dmax:
             if dmax_mode == 'dynamic':
                 dmax = (dmax + 2) / min(sr_size[0], sr_size[1])
-            final_image = rendering_cuda_new(sigma_x, sigma_y, rho, coords, colours_with_alpha, sr_size, step_size, dmax=dmax, device=sigma_x.device)
+            final_image = rendering_cuda_new(sigma_x, sigma_y, rho, coords, colours_with_alpha, feat_grads, sr_size, step_size, dmax=dmax, device=sigma_x.device)
         else:
-            final_image = rendering_cuda(sigma_x, sigma_y, rho, coords, colours_with_alpha, sr_size, step_size, device=sigma_x.device)
+            final_image = rendering_cuda(sigma_x, sigma_y, rho, coords, colours_with_alpha, feat_grads, sr_size, step_size, device=sigma_x.device)
     else:
-        final_image = rendering_python(sigma_x, sigma_y, rho, coords, colours_with_alpha, sr_size, step_size, device=sigma_x.device)
+        final_image = rendering_python(sigma_x, sigma_y, rho, coords, colours_with_alpha, feat_grads, sr_size, step_size, device=sigma_x.device)
     if sample_coords is not None:
         sample_RGB_values = [final_image[:, coord[0], coord[1]] for coord in sample_coords]
         final_image = torch.stack(sample_RGB_values, dim = 1)
@@ -235,6 +253,8 @@ def generate_2D_gaussian_splatting_step_buffer(sr_size, gs_parameters, scale, sc
     alpha = torch.sigmoid(gs_parameters[:, 3:4])
     colours = torch.sigmoid(gs_parameters[:, 4:7])
     coords = (gs_parameters[:, 7:9] * 2 - 1)
+    # 添加提取出来的第10维作为特征梯度。
+    feat_grads = gs_parameters[:, 9:10].contiguous()
     colours_with_alpha = colours * alpha
 
     # rendering
@@ -245,7 +265,7 @@ def generate_2D_gaussian_splatting_step_buffer(sr_size, gs_parameters, scale, sc
             torch.cuda.synchronize()
             torch.cuda.reset_peak_memory_stats()
             start = time.time()
-            final_image = rendering_cuda_new_buffer(sigma_x, sigma_y, rho, coords, colours_with_alpha, 
+            final_image = rendering_cuda_new_buffer(sigma_x, sigma_y, rho, coords, colours_with_alpha, feat_grads,
                                                     sr_size, step_size, dmax=dmax, device=sigma_x.device,
                                                     buffer_size = buffer_size)
             torch.cuda.synchronize()
@@ -254,7 +274,7 @@ def generate_2D_gaussian_splatting_step_buffer(sr_size, gs_parameters, scale, sc
             used_memory = torch.cuda.max_memory_allocated()
             print(f"Rendering time cost is {(time_cost)*1000} ms, Memory is {used_memory /1024 /1024} MB")
         else:
-            final_image = rendering_cuda_buffer(sigma_x, sigma_y, rho, coords, colours_with_alpha, 
+            final_image = rendering_cuda_buffer(sigma_x, sigma_y, rho, coords, colours_with_alpha, feat_grads,
                                                 sr_size, step_size, device=sigma_x.device,
                                                 buffer_size = buffer_size)
     else:
@@ -262,7 +282,7 @@ def generate_2D_gaussian_splatting_step_buffer(sr_size, gs_parameters, scale, sc
         torch.cuda.reset_peak_memory_stats()
         start = time.time()
 
-        final_image = rendering_python(sigma_x, sigma_y, rho, coords, colours_with_alpha, sr_size, step_size, device=sigma_x.device)
+        final_image = rendering_python(sigma_x, sigma_y, rho, coords, colours_with_alpha, feat_grads, sr_size, step_size, device=sigma_x.device)
 
         torch.cuda.synchronize()
         end = time.time()

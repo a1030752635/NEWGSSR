@@ -573,6 +573,10 @@ class Fea2GS(nn.Module):
         feat_gradient_map = (grad_norm - grad_min) / (grad_max - grad_min + 1e-8)
         #梯度图计算到此结束
 
+        #调整梯度图维度，形状变为 (b, H_out*W_out, 1)
+        feat_gradient_map = feat_gradient_map.flatten(2).transpose(1, 2)
+
+
         query = query.permute(0,2,3,1)
 
         # query = rearrange(query, '(b m n) (h w) c -> b m h n w c', m=h // self.window_size, n=w // self.window_size,
@@ -593,8 +597,9 @@ class Fea2GS(nn.Module):
                                                        self.num_gs_seed_sqrt * (w // self.window_size) * self.shuffle_scale1 * self.shuffle_scale2, srcs.device)
         query_mean = query_mean + reference_offset.reshape(1, -1, 2)
 
-        query = torch.cat([query_sigma, query_rho, query_alpha, query_rgb, query_mean],
-                          dim=-1)  # b, h_count*w_count*num_gs_seed, 9
+        #拼接上第10维特征图
+        query = torch.cat([query_sigma, query_rho, query_alpha, query_rgb, query_mean, feat_gradient_map],
+                          dim=-1)  # b, h_count*w_count*num_gs_seed, 10
 
         return query
 
