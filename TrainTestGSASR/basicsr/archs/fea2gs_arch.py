@@ -550,6 +550,29 @@ class Fea2GS(nn.Module):
                           h=self.num_gs_seed_sqrt)
         ### We make the number of GS = 16*LR_size in the following, through an simple upsample operation
         query = self.UPNet(query)
+
+        ##修改begin
+        #现在query的形状是(b,c,H_out,W_out)。
+
+        grad_x = torch.zeros_like(query)
+        grad_y = torch.zeros_like(query)
+
+        #相减计算相邻像素的梯度(右边减左边)
+        grad_x[:, :, :, :-1] = query[:, :, :, 1:] - query[:, :, :, :-1]
+        grad_y[:, :, :-1, :] = query[:, :, 1:, :] - query[:, :, :-1, :]
+
+        #计算通道维度的L2范数,目前形状为(b,c,H_out,W_out)->(b,1,H_out,W_out)
+        grad_norm = torch.sqrt(torch.sum(grad_x**2 + grad_y**2, dim=1, keepdim=True) + 1e-8)
+
+        #梯度计算归一化
+        b_size = grad_norm.shape[0]
+        grad_flat = grad_norm.view(b_size, -1) #把图片展平成(b,1*H*W)
+        grad_min = grad_flat.min(dim=1, keepdim=True)[0].view(b_size, 1, 1, 1) #(b_size,1,1,1)
+        grad_max = grad_flat.max(dim=1, keepdim=True)[0].view(b_size, 1, 1, 1) #(b_size,1,1,1)
+
+        feat_gradient_map = (grad_norm - grad_min) / (grad_max - grad_min + 1e-8)
+        #梯度图计算到此结束
+
         query = query.permute(0,2,3,1)
 
         # query = rearrange(query, '(b m n) (h w) c -> b m h n w c', m=h // self.window_size, n=w // self.window_size,
