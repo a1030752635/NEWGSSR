@@ -10,6 +10,7 @@ void gs_render(
         torch::Tensor &sigmas,
         torch::Tensor &coords,
         torch::Tensor &colors,
+        torch::Tensor &feat_grads,
         torch::Tensor &rendered_img,
 	const int s,
 	const int h,
@@ -21,6 +22,7 @@ void gs_render(
         CHECK_INPUT(sigmas);
         CHECK_INPUT(coords);
         CHECK_INPUT(colors);
+        CHECK_INPUT(feat_grads);
         CHECK_INPUT(rendered_img);
 
         // run the code at the cuda device same with the input
@@ -30,6 +32,7 @@ void gs_render(
             (const float *) sigmas.data_ptr(),
             (const float *) coords.data_ptr(),
             (const float *) colors.data_ptr(),
+            (const float *) feat_grads.data_ptr(),
             (float *) rendered_img.data_ptr(),
 	    s, h, w, c, dmax);
 }
@@ -38,6 +41,7 @@ void gs_render_backward(
         torch::Tensor &sigmas,
         torch::Tensor &coords,
         torch::Tensor &colors,
+        torch::Tensor &feat_grads,
         torch::Tensor &grads,
         torch::Tensor &grads_sigmas,
         torch::Tensor &grads_coords,
@@ -52,6 +56,7 @@ void gs_render_backward(
         CHECK_INPUT(sigmas);
         CHECK_INPUT(coords);
         CHECK_INPUT(colors);
+        CHECK_INPUT(feat_grads);
         CHECK_INPUT(grads);
         CHECK_INPUT(grads_sigmas);
         CHECK_INPUT(grads_coords);
@@ -65,6 +70,7 @@ void gs_render_backward(
             (const float *) sigmas.data_ptr(),
             (const float *) coords.data_ptr(),
             (const float *) colors.data_ptr(),
+            (const float *) feat_grads.data_ptr(),
             (const float *) grads.data_ptr(),
             (float *) grads_sigmas.data_ptr(),
             (float *) grads_coords.data_ptr(),

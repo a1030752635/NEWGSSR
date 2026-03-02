@@ -23,26 +23,26 @@ GSWrapper = gscuda
 class GSCUDA(Function):
    
         @staticmethod
-        def forward(ctx, sigmas, coords, colors, rendered_img, dmax):
+        def forward(ctx, sigmas, coords, colors, feat_grads, rendered_img, dmax):
             ctx.save_for_backward(sigmas, coords, colors)
             ctx.dmax = dmax
             h, w, c = rendered_img.shape
             s = sigmas.shape[0]
-            GSWrapper.gs_render(sigmas, coords, colors, rendered_img, s, h, w, c, dmax)
+            GSWrapper.gs_render(sigmas, coords, colors, feat_grads, rendered_img, s, h, w, c, dmax)
             return rendered_img
 
         @staticmethod
         @once_differentiable
         def backward(ctx, grad_output):
-            sigmas, coords, colors = ctx.saved_tensors
+            sigmas, coords, colors, feat_grads = ctx.saved_tensors
             dmax = ctx.dmax
             h, w, c = grad_output.shape
             s = sigmas.shape[0]
             grads_sigmas = torch.zeros_like(sigmas)
             grads_coords = torch.zeros_like(coords)
             grads_colors = torch.zeros_like(colors)
-            GSWrapper.gs_render_backward(sigmas, coords, colors, grad_output.contiguous(), grads_sigmas, grads_coords, grads_colors, s, h, w, c, dmax)
-            return (grads_sigmas, grads_coords, grads_colors, None, None)
+            GSWrapper.gs_render_backward(sigmas, coords, colors, feat_grads, grad_output.contiguous(), grads_sigmas, grads_coords, grads_colors, s, h, w, c, dmax)
+            return (grads_sigmas, grads_coords, grads_colors, None, None, None)
 
 def gaussiansplatting_render(sigmas, coords, colors, image_size,dmax=100):
     sigmas = sigmas.contiguous() # (gs num, 3)

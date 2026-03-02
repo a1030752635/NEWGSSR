@@ -8,6 +8,7 @@ __global__ void _gs_render_cuda(
         const float *sigmas,
         const float *coords,
         const float *colors,
+        const float *feat_grads,
         float *rendered_img,
 	const int s,  // gs num
 	const int h, 
@@ -18,6 +19,12 @@ __global__ void _gs_render_cuda(
 
         int curs = blockIdx.x*blockDim.x + threadIdx.x;
 	if(curs >= s){
+	    return;
+	}
+
+	// 动态剪枝(保留局部区域的第一个高斯球，杀掉其余15个)
+	float grad_val = feat_grads[curs];
+	if(grad_val < 0.1f && (curs % 16) !=0){
 	    return;
 	}
 
@@ -68,6 +75,7 @@ void _gs_render(
         const float *sigmas,
         const float *coords,
         const float *colors,
+        const float *feat_grads,
         float *rendered_img,
 	const int s, 
 	const int h, 
@@ -79,13 +87,14 @@ void _gs_render(
         int threads=64;
         dim3 grid(int(s/threads)+1);
         dim3 block(threads);
-        _gs_render_cuda<<<grid, block>>>(sigmas, coords, colors, rendered_img, s, h, w, c, dmax);
+        _gs_render_cuda<<<grid, block>>>(sigmas, coords, colors, feat_grads, rendered_img, s, h, w, c, dmax);
 }
 
 __global__ void _gs_render_backward_cuda(
         const float *sigmas,
         const float *coords,
         const float *colors,
+        const float *feat_grads,
         const float *grads,
         float *grads_sigmas,
         float *grads_coords,
@@ -100,6 +109,11 @@ __global__ void _gs_render_backward_cuda(
         int curs = blockIdx.x*blockDim.x + threadIdx.x;
 	if(curs >= s){
 	    return ;
+	}
+	// 反向传播的动态剪枝
+	float grad_val = feat_grads[curs];
+	if(grad_val < 0.1f && (curs % 16) != 0){
+	    return;
 	}
 
 	// obtain parameters of gs
@@ -168,6 +182,7 @@ void _gs_render_backward(
         const float *sigmas,
         const float *coords,
         const float *colors,
+        const float *feat_grads,
 	const float *grads, // (h, w, c)
 	float *grads_sigmas,
 	float *grads_coords,
@@ -182,6 +197,6 @@ void _gs_render_backward(
         int threads=64;
         dim3 grid(s, 1);
         dim3 block( threads, 1);
-        _gs_render_backward_cuda<<<grid, block>>>(sigmas, coords, colors, grads, grads_sigmas, grads_coords, grads_colors, s, h, w, c, dmax);
+        _gs_render_backward_cuda<<<grid, block>>>(sigmas, coords, colors, feat_grads, grads, grads_sigmas, grads_coords, grads_colors, s, h, w, c, dmax);
 }
 
