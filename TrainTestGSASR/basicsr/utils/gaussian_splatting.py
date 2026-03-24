@@ -10,12 +10,12 @@ import time
 
 def rendering_python(sigma_x, sigma_y, rho, coords, colours_with_alpha, feat_grads, sr_size, step_size, device):
     ####python剪枝修改
-    threshold = 0.1  # 设定梯度阈值，你可以后续调整这个值
+    threshold = 0.1  # 设定梯度阈值，后续调整这个值
     #找出梯度大于阈值的高斯球（True/False 掩码）
     valid_mask = (feat_grads > threshold).squeeze(-1)
     #网络上采样倍数是16(4x4)，让每 16 个高斯球中始终保留第1个。
     valid_mask[0::16] = True
-    #根据掩码过滤高斯求
+    #根据掩码过滤高斯球
     sigma_x = sigma_x[valid_mask]
     sigma_y = sigma_y[valid_mask]
     rho = rho[valid_mask]
@@ -151,18 +151,21 @@ def rendering_cuda_new_buffer(sigma_x, sigma_y, rho, coords, colours_with_alpha,
     coords[:, 1] = (coords[:, 1] + 1 - 1/sr_size[0]) * sr_size[0] / (sr_size[0] - 1) - 1.0
     colours_with_alpha = colours_with_alpha.contiguous()  # (gs num, 3)
 
+    feat_grads = feat_grads.contiguous()
+
     final_image = torch.zeros(sr_size[0], sr_size[1], 3).to(device).type(torch.float32).contiguous()
     # with torch.no_grad():
     #     final_image = GSCUDA.apply(sigmas, coords, colours_with_alpha, rendered_img, dmax)
     # final_image = (torch.sum(sigmas)+torch.sum(coords)+torch.sum(colours_with_alpha))*final_image
 
     # buffer
-    buffer_num = len(sigma_x)// buffer_size+1
+    buffer_num = len(sigma_x) // buffer_size + 1
     for buffer_id in range(buffer_num):
         # print(f'processing{buffer_id+1}/{buffer_num}')
-        idx_start, idx_end = buffer_id * buffer_size, (buffer_id+1) * buffer_size
+        idx_start, idx_end = buffer_id * buffer_size, (buffer_id + 1) * buffer_size
         final_image = GSCUDA.apply(sigmas[idx_start:idx_end], coords[idx_start:idx_end],
-                                    colours_with_alpha[idx_start:idx_end], final_image, dmax)
+                                   colours_with_alpha[idx_start:idx_end], feat_grads[idx_start:idx_end], final_image,
+                                   dmax)
         # final_image += buffer_image
 
     final_image = final_image.permute(2, 0, 1).contiguous()

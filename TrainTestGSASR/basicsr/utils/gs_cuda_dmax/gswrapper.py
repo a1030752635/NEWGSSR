@@ -24,7 +24,7 @@ class GSCUDA(Function):
    
         @staticmethod
         def forward(ctx, sigmas, coords, colors, feat_grads, rendered_img, dmax):
-            ctx.save_for_backward(sigmas, coords, colors)
+            ctx.save_for_backward(sigmas, coords, colors, feat_grads)
             ctx.dmax = dmax
             h, w, c = rendered_img.shape
             s = sigmas.shape[0]
@@ -44,12 +44,12 @@ class GSCUDA(Function):
             GSWrapper.gs_render_backward(sigmas, coords, colors, feat_grads, grad_output.contiguous(), grads_sigmas, grads_coords, grads_colors, s, h, w, c, dmax)
             return (grads_sigmas, grads_coords, grads_colors, None, None, None)
 
-def gaussiansplatting_render(sigmas, coords, colors, image_size,dmax=100):
+def gaussiansplatting_render(sigmas, coords, colors,feat_grads, image_size,dmax=100):
     sigmas = sigmas.contiguous() # (gs num, 3)
     coords = coords.contiguous() # (gs num, 2)
     colors = colors.contiguous() # (gs num, c)
     h, w = image_size[:2]
     c = colors.shape[-1]
     rendered_img = torch.zeros(h, w, c).to(colors.device).to(torch.float32)
-    return GSCUDA.apply(sigmas, coords, colors, rendered_img, dmax)
+    return GSCUDA.apply(sigmas, coords, colors, feat_grads,rendered_img, dmax)
 
