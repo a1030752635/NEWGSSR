@@ -551,36 +551,10 @@ class Fea2GS(nn.Module):
         ### We make the number of GS = 16*LR_size in the following, through an simple upsample operation
         query = self.UPNet(query)
 
-        ##修改begin
-        #现在query的形状是(b,c,H_out,W_out)。
 
-        grad_x = torch.zeros_like(query)
-        grad_y = torch.zeros_like(query)
-
-        #相减计算相邻像素的梯度(右边减左边)
-        grad_x[:, :, :, :-1] = query[:, :, :, 1:] - query[:, :, :, :-1]
-        grad_y[:, :, :-1, :] = query[:, :, 1:, :] - query[:, :, :-1, :]
-
-        #计算通道维度的L2范数,目前形状为(b,c,H_out,W_out)->(b,1,H_out,W_out)
-        grad_norm = torch.sqrt(torch.sum(grad_x**2 + grad_y**2, dim=1, keepdim=True) + 1e-8)
-
-        #梯度计算归一化
-        b_size = grad_norm.shape[0]
-        grad_flat = grad_norm.view(b_size, -1) #把图片展平成(b,1*H*W)
-        grad_min = grad_flat.min(dim=1, keepdim=True)[0].view(b_size, 1, 1, 1) #(b_size,1,1,1)
-        grad_max = grad_flat.max(dim=1, keepdim=True)[0].view(b_size, 1, 1, 1) #(b_size,1,1,1)
-
-        feat_gradient_map = (grad_norm - grad_min) / (grad_max - grad_min + 1e-8)
-        #梯度图计算到此结束
-
-        #调整梯度图维度，形状变为 (b, H_out*W_out, 1)
-        feat_gradient_map = feat_gradient_map.flatten(2).transpose(1, 2)
-
-
-        query = query.permute(0,2,3,1)
-
-        # query = rearrange(query, '(b m n) (h w) c -> b m h n w c', m=h // self.window_size, n=w // self.window_size,
-        #                   h=self.num_gs_seed_sqrt)
+        #先张量转置并获取各个高斯参数
+        query = query.permute(0, 2, 3, 1)  # 形状变为 (b, H_out, W_out, channel)
+        H_out, W_out = query.shape[1], query.shape[2]
 
         query_sigma = self.mlp_block_sigma(query).reshape(b, -1, 2)
         query_rho = self.mlp_block_rho(query).reshape(b, -1, 1)
@@ -588,21 +562,53 @@ class Fea2GS(nn.Module):
         query_rgb = self.mlp_block_rgb(query).reshape(b, -1, 3)
         query_mean = self.mlp_block_mean(query).reshape(b, -1, 2)
 
-        query_mean = query_mean / torch.tensor(
-            [self.num_gs_seed_sqrt * (w // self.window_size) * self.shuffle_scale1 * self.shuffle_scale2, 
-            self.num_gs_seed_sqrt * (h // self.window_size) * self.shuffle_scale1 * self.shuffle_scale2])[
-            None, None].to(query_mean.device)  # b, h_count*w_count*num_gs_seed, 2
+        # ================= 修改 begin =================
+        # 使用真实的 RGB 颜色预测来计算图像空间梯度
+        # 将 RGB 重新变回图像空间结构 (b, 3, H_out, W_out)
+        # 加上 .detach() 切断反向传播，防止剪枝 Mask 的梯度对 RGB 预测产生死循环干扰
+        rgb_spatial = query_rgb.view(b, H_out, W_out, 3).permute(0, 3, 1, 2).detach()
 
-        reference_offset = self.get_N_reference_points(self.num_gs_seed_sqrt * (h // self.window_size) * self.shuffle_scale1 * self.shuffle_scale2,
-                                                       self.num_gs_seed_sqrt * (w // self.window_size) * self.shuffle_scale1 * self.shuffle_scale2, srcs.device)
+        grad_x = torch.zeros_like(rgb_spatial)
+        grad_y = torch.zeros_like(rgb_spatial)
+
+        # 相减计算真实图像的相邻像素梯度
+        grad_x[:, :, :, :-1] = rgb_spatial[:, :, :, 1:] - rgb_spatial[:, :, :, :-1]
+        grad_y[:, :, :-1, :] = rgb_spatial[:, :, 1:, :] - rgb_spatial[:, :, :-1, :]
+
+        # 计算 RGB 通道的 L2 范数，形状为 (b, 1, H_out, W_out)
+        grad_norm = torch.sqrt(torch.sum(grad_x ** 2 + grad_y ** 2, dim=1, keepdim=True) + 1e-8)
+
+        # 梯度计算归一化
+        b_size = grad_norm.shape[0]
+        grad_flat = grad_norm.view(b_size, -1)
+        grad_min = grad_flat.min(dim=1, keepdim=True)[0].view(b_size, 1, 1, 1)
+        grad_max = grad_flat.max(dim=1, keepdim=True)[0].view(b_size, 1, 1, 1)
+
+        feat_gradient_map = (grad_norm - grad_min) / (grad_max - grad_min + 1e-8)
+
+        # 增加底线保护
+        # 防止天空等完全平坦区域被全局 max 压成 0，导致整块天空的高斯点被彻底抹杀
+        feat_gradient_map = torch.clamp(feat_gradient_map, min=0.05)
+
+        # 调整梯度图维度，形状变为 (b, H_out*W_out, 1)
+        feat_gradient_map = feat_gradient_map.flatten(2).transpose(1, 2)
+        # ================= 修改 end =================
+
+        query_mean = query_mean / torch.tensor(
+            [self.num_gs_seed_sqrt * (w // self.window_size) * self.shuffle_scale1 * self.shuffle_scale2,
+             self.num_gs_seed_sqrt * (h // self.window_size) * self.shuffle_scale1 * self.shuffle_scale2])[
+            None, None].to(query_mean.device)
+
+        reference_offset = self.get_N_reference_points(
+            self.num_gs_seed_sqrt * (h // self.window_size) * self.shuffle_scale1 * self.shuffle_scale2,
+            self.num_gs_seed_sqrt * (w // self.window_size) * self.shuffle_scale1 * self.shuffle_scale2, srcs.device)
         query_mean = query_mean + reference_offset.reshape(1, -1, 2)
 
-        #拼接上第10维特征图
+        # 拼接上第10维梯度图，继续参与后续逻辑
         query = torch.cat([query_sigma, query_rho, query_alpha, query_rgb, query_mean, feat_gradient_map],
-                          dim=-1)  # b, h_count*w_count*num_gs_seed, 10
+                          dim=-1)
 
         return query
-
 
 if __name__ == '__main__':
     srcs = torch.randn(6, 64, 48, 48).cuda()

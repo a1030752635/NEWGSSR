@@ -22,11 +22,17 @@ __global__ void _gs_render_cuda(
 	    return;
 	}
 
-	// 动态剪枝(保留局部区域的第一个高斯球，杀掉其余15个)
-	float grad_val = feat_grads[curs];
-	if(grad_val < 0.1f && (curs % 16) !=0){
-	    return;
-	}
+    // 动态剪枝逻辑修改 (保留 4x4 局部区域的左上角锚点)
+    float grad_val = feat_grads[curs];
+
+    // 利用传入的图像宽度 w，将一维线程索引反解出真实的图像 x, y 坐标
+    int cur_w = curs % w;
+    int cur_h = curs / w;
+
+    // 如果梯度小于阈值，并且当前坐标不是 4x4 块的左上角，则杀掉该高斯球
+    if(grad_val < 0.1f && !(cur_w % 4 == 0 && cur_h % 4 == 0)){
+        return;
+    }
 
 	float sigma_x = sigmas[curs*3+0];
 	float sigma_y = sigmas[curs*3+1];

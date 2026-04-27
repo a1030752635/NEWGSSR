@@ -9,22 +9,38 @@ from torchvision.utils import save_image
 import time
 
 def rendering_python(sigma_x, sigma_y, rho, coords, colours_with_alpha, feat_grads, sr_size, step_size, device):
-    ####python剪枝修改
+    sr_h, sr_w = sr_size[0], sr_size[1]
+    num_gs = sigma_x.shape[0]
+
+    #### python 剪枝修改 (修复二维坐标错位) begin ####
     threshold = 0.1  # 设定梯度阈值，后续调整这个值
-    #找出梯度大于阈值的高斯球（True/False 掩码）
+
+    # 1. 找出梯度大于阈值的高斯球（True/False 掩码），形状为 (num_gs,)
     valid_mask = (feat_grads > threshold).squeeze(-1)
-    #网络上采样倍数是16(4x4)，让每 16 个高斯球中始终保留第1个。
-    valid_mask[0::16] = True
-    #根据掩码过滤高斯球
+
+    # 2. 动态计算高斯网格的二维尺寸 (H_out, W_out)
+    # 利用高斯点总数和最终图像的宽高比，反推特征图的实际高宽
+    W_out = int(math.sqrt(num_gs * sr_w / sr_h))
+    H_out = int(num_gs / W_out)
+
+    # 3. 还原回二维空间进行网格化兜底保留
+    valid_mask_2d = valid_mask.view(H_out, W_out)
+    # 每隔 4 行、4 列强制保留一个锚点 (完美对应 4x4 块结构)
+    valid_mask_2d[::4, ::4] = True
+
+    # 4. 重新展平回一维掩码
+    valid_mask = valid_mask_2d.view(-1)
+
+    # 5. 根据掩码过滤高斯球
     sigma_x = sigma_x[valid_mask]
     sigma_y = sigma_y[valid_mask]
     rho = rho[valid_mask]
     coords = coords[valid_mask]
     colours_with_alpha = colours_with_alpha[valid_mask]
-    ####python剪枝修改
 
-    sr_h, sr_w = sr_size[0], sr_size[1]
-    num_gs = sigma_x.shape[0] #此处的num_gs即为剪枝后的数量
+    # 更新剪枝后的真实数量
+    num_gs = sigma_x.shape[0]
+    #### python 剪枝修改end ####
 
     sigma_x = sigma_x[...,None]
     sigma_y = sigma_y[...,None]
